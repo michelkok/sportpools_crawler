@@ -22,6 +22,9 @@
             ]
         }
     },
+    "mounts": [
+        "source=${localEnv:HOME}/.ssh,target=${localEnv:HOME}/.ssh,readonly,type=bind"
+    ],
     "postStartCommand": "git config --global --add safe.directory /workspace",
     "features": {
         "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {},
