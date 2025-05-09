@@ -1,0 +1,13 @@
+services:
+  sportpools_crawler-dev:
+    extends:
+      file: ../docker-compose.yaml
+      service: sportpools_crawler
+    container_name: sportpools_crawler_dev
+    volumes:
+      # Mounts the project folder to '/workspace'. While this file is in .devcontainer,
+      # mounts are relative to the first file in the list, which is a level up.
+      - ..:/workspace:cached
+
+    # Overrides default command so things don't shut down after the process ends.
+    command: /bin/sh -c "while sleep 1000; do :; done"

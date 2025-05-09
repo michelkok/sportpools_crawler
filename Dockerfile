@@ -1,0 +1,17 @@
+# Use a lightweight official Python image
+FROM python:3.12-slim
+
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Install uv from the official image
+COPY --from=ghcr.io/astral-sh/uv:0.5.4 /uv /bin/uv
+
+COPY pyproject.toml uv.lock .python-version /app/
+
+# Install the dependencies
+RUN uv sync --frozen --no-install-project --no-cache
+
+# Copy the rest of your application code
+COPY . .

@@ -1,0 +1,6 @@
+services:
+  sportpools_crawler:
+    container_name: sportpools_crawler
+    build:
+      context: .
+      dockerfile: ./Dockerfile

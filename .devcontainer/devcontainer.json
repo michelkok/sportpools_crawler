@@ -1,0 +1,30 @@
+{
+    "name": "sportpools_crawler-dev",
+    "dockerComposeFile": "docker-compose.extend.yaml",
+    "service": "sportpools_crawler-dev",
+    "workspaceFolder": "/workspace",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "GitHub.copilot",
+                "Gruntfuggly.todo-tree",
+                "charliermarsh.ruff",
+                "ms-vscode.makefile-tools",
+                "ms-toolsai.jupyter",
+                "johnpapa.vscode-peacock",
+                "eamodio.gitlens",
+                "vivaxy.vscode-conventional-commits",
+                "KevinRose.vsc-python-indent",
+                "mgesbert.python-path",
+                "LittleFoxTeam.vscode-python-test-adapter",
+                "njpwerner.autodocstring"
+            ]
+        }
+    },
+    "postStartCommand": "git config --global --add safe.directory /workspace",
+    "features": {
+        "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {},
+        "ghcr.io/devcontainers/features/git:1": {}
+    }
+}
