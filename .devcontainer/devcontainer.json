@@ -18,7 +18,8 @@
                 "KevinRose.vsc-python-indent",
                 "mgesbert.python-path",
                 "LittleFoxTeam.vscode-python-test-adapter",
-                "njpwerner.autodocstring"
+                "njpwerner.autodocstring",
+                "GitHub.copilot-chat"
             ]
         }
     },
