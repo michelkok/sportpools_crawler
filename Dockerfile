@@ -19,7 +19,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.4 /uv /bin/uv
 COPY pyproject.toml uv.lock .python-version /app/
 
 # Install the dependencies
-RUN uv sync --frozen --no-install-project --no-cache
+RUN uv sync --frozen --no-cache
+
+RUN uv run playwright install-deps
 
 # Copy the rest of your application code
 COPY . .
