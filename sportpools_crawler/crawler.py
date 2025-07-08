@@ -1,6 +1,8 @@
 import asyncio
 import os
 import csv
+import json
+import unicodedata
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
@@ -23,6 +25,7 @@ class Rider:
     sprint_points: int
     young_gc_points: int | str
     points: int
+    is_kluns: bool
 
 
 async def login(page):
@@ -35,10 +38,46 @@ async def login(page):
     print("✅ Logged in successfully.")
 
 
-def parse_rider_row(row) -> Rider:
-    name = row.select_one("span.font-weight-medium").get_text(strip=True)
+def normalize_text(text):
+    """Convert accented characters to their basic forms (é -> e, ã -> a, etc.)"""
+    if not text:
+        return ""
+
+    # First try to fix common encoding issues
+    try:
+        # Try to decode/encode to fix mojibake
+        if "Ã" in text or "Ä" in text or "Ã©" in text:
+            # Common mojibake patterns - try to fix them
+            text = text.replace("Ã©", "é").replace("Ã¡", "á").replace("Ã­", "í")
+            text = text.replace("Ã³", "ó").replace("Ãº", "ú").replace("Ã±", "ñ")
+            text = text.replace("Ã§", "ç").replace("Ã¨", "è").replace("Ã ", "à")
+            text = text.replace("Ã´", "ô").replace("Ã¢", "â").replace("Ã«", "ë")
+            text = text.replace("Ã¯", "ï").replace("Ã¼", "ü").replace("Ã¤", "ä")
+            text = text.replace("Ã¶", "ö").replace("Ã…", "Å").replace("Ã˜", "Ø")
+            text = text.replace("Ä", "c").replace("Ä", "C")
+    except:
+        pass
+
+    # Remove accents and normalize to ASCII
+    try:
+        # Normalize to NFD (decomposed form)
+        normalized = unicodedata.normalize("NFD", text)
+        # Filter out combining characters (accents)
+        ascii_text = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
+        return ascii_text
+    except:
+        # If all else fails, return original text
+        return text
+
+
+def parse_rider_row(row, is_last_rider=False) -> Rider:
+    name_element = row.select_one("span.font-weight-medium")
+    name = name_element.get_text(strip=True) if name_element else ""
+    name = normalize_text(name)
+
     team_span = row.select_one("span.d-block.text-sm.text-nowrap")
     team = team_span.get_text(strip=True) if team_span else ""
+    team = normalize_text(team)
 
     dnf_span = row.select_one("span.text-nowrap.pl-10")
     dnf = "DNF" in dnf_span.get_text() if dnf_span else False
@@ -64,62 +103,148 @@ def parse_rider_row(row) -> Rider:
         sprint_points=stats[3],
         young_gc_points=stats[4],
         points=stats[5],
+        is_kluns=is_last_rider,
     )
 
 
 async def get_riders_for_team(page, team_url) -> list[Rider]:
     await page.goto(team_url)
+
+    # Set proper encoding for the page
+    await page.set_extra_http_headers({"Accept-Charset": "utf-8"})
+
     content = await page.content()
-    soup = BeautifulSoup(content, "html.parser")
+    soup = BeautifulSoup(content, "html.parser", from_encoding="utf-8")
 
     riders = []
-    for row in soup.select("div.w-100.d-flex.align-items-center"):
+    rider_rows = soup.select("div.w-100.d-flex.align-items-center")
+
+    print(f"   Found {len(rider_rows)} riders for this team")
+
+    for i, row in enumerate(rider_rows):
         try:
-            rider = parse_rider_row(row)
+            # The last rider is the "kluns"
+            is_last_rider = i == len(rider_rows) - 1
+            rider = parse_rider_row(row, is_last_rider)
             riders.append(rider)
+            print(f"   Rider {i + 1}: {rider.name} (Kluns: {rider.is_kluns})")
         except Exception as e:
             print(f"⚠️ Skipping row due to error: {e}")
 
     return riders
 
 
+async def fetch_api_data(page, pool_id, subleague_id, page_num):
+    """Fetch data from the API endpoint"""
+    api_url = f"https://www.sportpools.net/api/cycling/pools/{pool_id}/subleagues/{subleague_id}/signups?page={page_num}"
+
+    try:
+        # Use Playwright to fetch the API since we need authentication
+        response = await page.goto(api_url)
+        if response.status == 200:
+            content = await page.content()
+            # Extract JSON from the page content (it should be the entire page content)
+            json_start = content.find("{")
+            json_end = content.rfind("}") + 1
+            if json_start != -1 and json_end != -1:
+                json_content = content[json_start:json_end]
+                # Parse with proper encoding handling
+                return json.loads(json_content, strict=False)
+        else:
+            print(f"⚠️ API request failed with status: {response.status}")
+            return None
+    except Exception as e:
+        print(f"⚠️ Error fetching API data for page {page_num}: {e}")
+        return None
+
+
+async def get_all_users_from_api(page, pool_id, subleague_id) -> dict[str, str]:
+    """Get all users and their team URLs using the API"""
+    all_users = {}
+    page_num = 1
+
+    while True:
+        print(f"📡 Fetching API data for page {page_num}...")
+
+        api_data = await fetch_api_data(page, pool_id, subleague_id, page_num)
+        if not api_data or "data" not in api_data:
+            print(f"⚠️ No data found for page {page_num}")
+            break
+
+        users_on_page = api_data["data"]
+        print(f"   Found {len(users_on_page)} users on page {page_num}")
+
+        # Extract username and team URL for each user
+        for user_data in users_on_page:
+            signup = user_data.get("signup", {})
+            user_info = signup.get("user", {})
+            username = user_info.get("username", "")
+            team_url = signup.get("selectionUrl", "")
+
+            if username and team_url:
+                all_users[username] = team_url
+
+        # Check if this is the last page
+        last_page = api_data.get("lastPage", 1)
+        if page_num >= last_page:
+            print(f"✅ Reached last page ({last_page})")
+            break
+
+        page_num += 1
+
+        # Safety check to avoid infinite loops
+        if page_num > 50:  # Adjust as needed
+            print("⚠️ Reached maximum page limit (50). Stopping.")
+            break
+
+    return all_users
+
+
 async def crawl_subleague_teamurls(subleague_url) -> dict[str, list[Rider]]:
+    # Extract pool_id and subleague_id from the URL
+    # URL format: https://www.sportpools.net/nl/tour-de-france/2025/klassementen/subleague/2154
+    parts = subleague_url.split("/")
+    subleague_id = parts[-1]  # 2154
+
+    # For Tour de France 2025, the pool ID appears to be 246 based on your API example
+    # You might need to adjust this if it's different
+    pool_id = 246
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         page = await browser.new_page()
 
         await login(page)
-        await page.goto(subleague_url)
-        content = await page.content()
-        soup = BeautifulSoup(content, "html.parser")
 
-        name_url_map = {}
-        for td in soup.find_all("td"):
-            img_tag = td.find("img")
-            a_tag = td.find("a")
-            if img_tag and a_tag:
-                name = a_tag.get_text(strip=True)
-                href = a_tag.get("href")
-                if name and href:
-                    full_url = (
-                        "https://www.sportpools.net" + href
-                        if href.startswith("/")
-                        else href
-                    )
-                    name_url_map[name] = full_url
+        print(
+            f"🔍 Getting all users from API (pool: {pool_id}, subleague: {subleague_id})..."
+        )
 
+        # Get all user-team mappings using the API
+        name_url_map = await get_all_users_from_api(page, pool_id, subleague_id)
+
+        print(f"📊 Found {len(name_url_map)} users total")
+
+        # Now crawl each team
         user_riders = {}
-        for name, url in name_url_map.items():
-            print(f"🔍 Crawling team for {name} ...")
+        for i, (name, url) in enumerate(name_url_map.items(), 1):
+            print(f"🔍 Crawling team for {name} ({i}/{len(name_url_map)})...")
             riders = await get_riders_for_team(page, url)
             user_riders[name] = riders
+
+            # Debug: Show kluns info for first few teams
+            if i <= 3:
+                kluns_riders = [r for r in riders if r.is_kluns]
+                print(
+                    f"   Team {name} has {len(kluns_riders)} kluns riders: {[r.name for r in kluns_riders]}"
+                )
 
         await browser.close()
         return user_riders
 
 
 def export_to_csv(user_riders: dict[str, list[Rider]], filename="riders.csv"):
-    with open(filename, mode="w", newline="", encoding="utf-8") as f:
+    with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow(
             [
@@ -127,12 +252,13 @@ def export_to_csv(user_riders: dict[str, list[Rider]], filename="riders.csv"):
                 "Renner",
                 "Team",
                 "Uitgevallen",
-                "",
+                "Kosten",
                 "Eind",
                 "Berg",
                 "Sprint",
                 "Jongeren",
                 "Punten",
+                "Kluns",
             ]
         )
         for user, riders in user_riders.items():
@@ -151,13 +277,16 @@ def export_to_csv(user_riders: dict[str, list[Rider]], filename="riders.csv"):
                         if isinstance(r.young_gc_points, int)
                         else "-",
                         r.points,
+                        "Ja" if r.is_kluns else "Nee",
                     ]
                 )
     print(f"📁 CSV exported to {filename}")
 
 
 if __name__ == "__main__":
-    s_url = "https://www.sportpools.net/nl/giro-italia/2025/klassementen/subleague/2154"
+    s_url = (
+        "https://www.sportpools.net/nl/tour-de-france/2025/klassementen/subleague/2154"
+    )
     user_riders = asyncio.run(crawl_subleague_teamurls(subleague_url=s_url))
 
     for user, riders in user_riders.items():
